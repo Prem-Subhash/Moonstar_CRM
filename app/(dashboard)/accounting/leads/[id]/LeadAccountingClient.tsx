@@ -702,7 +702,7 @@ export default function LeadAccountingClient({
                 </label>
                 <div className="relative rounded-xl shadow-sm">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                    <Percent size={14} />
+                    <DollarSign size={14} />
                   </div>
                   <input
                     type="number"

@@ -6,9 +6,11 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
 import {
   Eye, Search, AlertCircle, CheckCircle2, Info,
-  ChevronLeft, ChevronRight, ShieldCheck, Filter, SlidersHorizontal
+  ChevronLeft, ChevronRight, ShieldCheck, Filter, SlidersHorizontal,
+  Edit2, Check, X, Loader2
 } from 'lucide-react'
 import Loading from '@/components/ui/Loading'
+import { useToast } from '@/components/ui/Toast'
 import { formatCurrency } from '@/lib/currency'
 import { getActivePolicy } from '@/utils/activePolicyHelper'
 import { resolvePolicyState } from '@/utils/policyStateHelper'
@@ -38,7 +40,7 @@ type Lead = {
 }
 
 const STAGE_FILTERS = [
-  { label: 'All Stages', value: null },
+  { label: 'All Stages', value: 'all' },
   { label: 'New Lead', value: 'New Lead' },
   { label: 'Quoting', value: 'Quoting in Progress' },
   { label: 'Quote Sent', value: 'Quote Has Been Emailed' },
@@ -50,9 +52,10 @@ const STAGE_FILTERS = [
 export default function AccountingAllLeadsPage() {
   const searchParams = useSearchParams()
   const router = useRouter()
+  const { showToast } = useToast()
   
   // URL Params initialization
-  const stageFilter = searchParams.get('stage')
+  const stageFilter = searchParams.get('stage') || 'Completed'
   const urlCategory = searchParams.get('category')
   const urlFlow = searchParams.get('flow')
   const urlStatus = searchParams.get('status')
@@ -62,6 +65,12 @@ export default function AccountingAllLeadsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [page, setPage] = useState(0)
   const [showFilters, setShowFilters] = useState(Boolean(urlCategory || urlFlow || urlStatus))
+
+  // Inline Edit State
+  const [editingRowId, setEditingRowId] = useState<string | null>(null)
+  const [editingValue, setEditingValue] = useState<string>('')
+  const [savingRowId, setSavingRowId] = useState<string | null>(null)
+  const [inlineError, setInlineError] = useState<string | null>(null)
 
   const [accountingStatusFilter, setAccountingStatusFilter] = useState<string>(urlStatus || 'all')
   const [accountingVerifiedFilter, setAccountingVerifiedFilter] = useState<string>('all')
@@ -78,6 +87,66 @@ export default function AccountingAllLeadsPage() {
   const [availableFlows, setAvailableFlows] = useState<string[]>([])
   const [availableStates, setAvailableStates] = useState<string[]>([])
   const [availableCsrs, setAvailableCsrs] = useState<{ id: string; name: string }[]>([])
+
+  const handleInlineStart = (lead: Lead) => {
+    setEditingRowId(lead.id)
+    setEditingValue(lead.actual_commission !== undefined && lead.actual_commission !== null ? String(lead.actual_commission) : '0')
+    setInlineError(null)
+  }
+
+  const handleInlineCancel = () => {
+    setEditingRowId(null)
+    setEditingValue('')
+    setInlineError(null)
+  }
+
+  const handleInlineSave = async (lead: Lead) => {
+    const numVal = parseFloat(editingValue)
+    if (isNaN(numVal) || numVal < 0) {
+      showToast('Actual Commission must be a valid non-negative number.', 'error')
+      setInlineError('Must be >= 0')
+      return
+    }
+
+    setSavingRowId(lead.id)
+    setInlineError(null)
+
+    try {
+      const res = await fetch('/api/accounting/update-commission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadId: lead.id,
+          expectedCommission: Number(lead.expected_commission) || 0,
+          actualCommission: numVal
+        })
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to update commission')
+      }
+
+      setLeads(prevLeads =>
+        prevLeads.map(item =>
+          item.id === lead.id
+            ? { ...item, actual_commission: numVal }
+            : item
+        )
+      )
+
+      showToast(data.message || 'Actual commission updated successfully.', 'success')
+      setEditingRowId(null)
+      setEditingValue('')
+    } catch (err: any) {
+      console.error('Failed to update inline actual commission:', err)
+      showToast(err.message || 'Error updating commission.', 'error')
+      setInlineError(err.message || 'Failed')
+    } finally {
+      setSavingRowId(null)
+    }
+  }
 
   useEffect(() => {
     if (urlCategory) setCategoryFilter(urlCategory)
@@ -150,7 +219,7 @@ export default function AccountingAllLeadsPage() {
       else if (sortBy === 'premium_desc') query = query.order('total_premium', { ascending: false })
       else if (sortBy === 'comm_desc') query = query.order('expected_commission', { ascending: false })
 
-      if (stageFilter) {
+      if (stageFilter && stageFilter !== 'all') {
         if (stageFilter === 'Completed') {
           query = query.in('current_stage.stage_name', ['Completed', 'Completed (Same)', 'Completed (Switch)'])
         } else {
@@ -229,7 +298,7 @@ export default function AccountingAllLeadsPage() {
 
   const applyFilter = (stage: string | null) => {
     setPage(0)
-    if (!stage) router.push('/accounting/all-leads')
+    if (!stage || stage === 'all') router.push('/accounting/all-leads?stage=all')
     else router.push(`/accounting/all-leads?stage=${encodeURIComponent(stage)}`)
   }
 
@@ -560,8 +629,64 @@ export default function AccountingAllLeadsPage() {
                       <td className="px-3 py-3.5 text-right text-gray-900 text-xs align-top">
                         {formatCurrency(lead.expected_commission)}
                       </td>
-                      <td className="px-3 py-3.5 text-right text-gray-900 font-medium text-xs align-top">
-                        {formatCurrency(lead.actual_commission)}
+                      <td className="px-3 py-3 text-right text-gray-900 font-medium text-xs align-top">
+                        {editingRowId === lead.id ? (
+                          <div className="flex flex-col items-end gap-1">
+                            <div className="flex items-center gap-1 justify-end">
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={editingValue}
+                                onChange={(e) => setEditingValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleInlineSave(lead)
+                                  if (e.key === 'Escape') handleInlineCancel()
+                                }}
+                                disabled={savingRowId === lead.id}
+                                autoFocus
+                                className="w-20 px-2 py-1 text-xs font-bold border border-emerald-500 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-right text-gray-900 shadow-sm"
+                              />
+                              {savingRowId === lead.id ? (
+                                <Loader2 size={14} className="animate-spin text-emerald-600 shrink-0" />
+                              ) : (
+                                <div className="flex items-center gap-0.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleInlineSave(lead)}
+                                    className="p-1 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-md transition-colors"
+                                    title="Save Actual Commission"
+                                  >
+                                    <Check size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handleInlineCancel}
+                                    className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
+                                    title="Cancel"
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            {inlineError && (
+                              <span className="text-[10px] text-red-500 font-semibold">{inlineError}</span>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-end gap-1 group/cell">
+                            <span>{formatCurrency(lead.actual_commission)}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleInlineStart(lead)}
+                              className="p-1 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors opacity-70 group-hover/cell:opacity-100"
+                              title="Edit Actual Commission"
+                            >
+                              <Edit2 size={12} />
+                            </button>
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-3.5 text-center align-top">
                         <StatusBadge status={lead.accounting_status} />
