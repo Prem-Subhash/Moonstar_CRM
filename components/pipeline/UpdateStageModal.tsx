@@ -24,8 +24,7 @@ import {
   COMMERCIAL_LINES_FIELDS,
   COMMERCIAL_RENEWAL_FIELDS
 } from '@/utils/stageFieldsConfig'
-
-
+import { getActivePolicy } from '@/utils/activePolicyHelper'
 
 export default function UpdateStageModal({
   leadId,
@@ -47,6 +46,15 @@ export default function UpdateStageModal({
   // Ideally, we load the pipeline info.
   const [pipelineType, setPipelineType] = useState<'PersonalNewBusiness' | 'PersonalRenewal' | 'Commercial' | 'CommercialRenewal' | 'Unknown'>('Unknown')
   const [leadCategory, setLeadCategory] = useState<'personal' | 'commercial' | ''>('')
+  const [leadRecord, setLeadRecord] = useState<any>(null)
+
+  const getEffectivePremium = (data: Record<string, any>) => {
+    if (data.bound_premium !== undefined && data.bound_premium !== null && data.bound_premium !== '') return Number(data.bound_premium) || 0
+    if (data.new_premium !== undefined && data.new_premium !== null && data.new_premium !== '') return Number(data.new_premium) || 0
+    if (data.renewal_premium !== undefined && data.renewal_premium !== null && data.renewal_premium !== '') return Number(data.renewal_premium) || 0
+    if (leadRecord) return getActivePolicy(leadRecord).activePremium || 0
+    return 0
+  }
 
   /* ================= LOAD STAGES ================= */
   useEffect(() => {
@@ -60,12 +68,16 @@ export default function UpdateStageModal({
   async function loadStages() {
     setLoading(true)
 
-    // Parallel fetch: Pipeline Details + Stages + Lead Category
+    // Parallel fetch: Pipeline Details + Stages + Lead Category & Premiums
     const [pipelineRes, stagesRes, leadRes] = await Promise.all([
       supabase.from('pipelines').select('name, category').eq('id', pipelineId).single(),
       supabase.from('pipeline_stages').select('*').eq('pipeline_id', pipelineId).order('stage_order'),
-      supabase.from('temp_leads_basics').select('insurence_category').eq('id', leadId).single()
+      supabase.from('temp_leads_basics').select('insurence_category, renewal_premium, total_premium, current_premium, new_premium, carrier, insurance_company_id').eq('id', leadId).single()
     ])
+
+    if (leadRes.data) {
+      setLeadRecord(leadRes.data)
+    }
 
     if (pipelineRes.error) {
       console.error('Pipeline fetch error', pipelineRes.error)
@@ -84,9 +96,8 @@ export default function UpdateStageModal({
       }
     }
 
-    if (leadRes.data?.insurence_category) {
-      setLeadCategory(leadRes.data.insurence_category.toLowerCase() === 'commercial' ? 'commercial' : 'personal')
-    }
+    const cat = leadRes.data?.insurence_category || pipelineRes.data?.category || ''
+    setLeadCategory(cat.toLowerCase().includes('commercial') ? 'commercial' : 'personal')
 
     if (stagesRes.error) {
       console.error(stagesRes.error)
@@ -165,7 +176,7 @@ export default function UpdateStageModal({
   // Effect for commission calculation
   useEffect(() => {
     if (formData.expected_commission_type === 'PERCENTAGE') {
-      const premium = Number(formData.bound_premium || formData.new_premium || 0)
+      const premium = getEffectivePremium(formData)
       const percentage = Number(formData.expected_commission_percentage || 0)
       
       const calculatedAmount = Number(((premium * percentage) / 100).toFixed(2))
@@ -174,7 +185,7 @@ export default function UpdateStageModal({
         setFormData(prev => ({ ...prev, expected_commission: calculatedAmount }))
       }
     }
-  }, [formData.expected_commission_type, formData.expected_commission_percentage, formData.bound_premium, formData.new_premium])
+  }, [formData.expected_commission_type, formData.expected_commission_percentage, formData.bound_premium, formData.new_premium, formData.renewal_premium, leadRecord])
 
   /* ================= CLIENT VALIDATION ================= */
   function validateClientSide() {
@@ -200,8 +211,8 @@ export default function UpdateStageModal({
       }
     }
 
-    if (formData.expected_commission_type === 'PERCENTAGE' && !Number(formData.bound_premium || formData.new_premium)) {
-      toast('Please enter Bound Premium to calculate Commission Percentage', 'warning')
+    if (formData.expected_commission_type === 'PERCENTAGE' && !getEffectivePremium(formData)) {
+      toast('Please enter Bound / Renewal Premium to calculate Commission Percentage', 'warning')
       return false
     }
 
@@ -253,7 +264,7 @@ export default function UpdateStageModal({
                 if (commissionPercent !== undefined && commissionPercent !== null && !isNaN(Number(commissionPercent))) {
                   const numPercent = Number(commissionPercent)
                   nextState.expected_commission_percentage = numPercent
-                  const premium = Number(nextState.bound_premium || nextState.new_premium || 0)
+                  const premium = getEffectivePremium(nextState)
                   if (premium > 0) {
                     nextState.expected_commission = Number(((premium * numPercent) / 100).toFixed(2))
                   }
@@ -268,7 +279,7 @@ export default function UpdateStageModal({
 
       case 'commission': {
         const cType = formData.expected_commission_type || 'AMOUNT'
-        const premium = Number(formData.bound_premium || formData.new_premium || 0)
+        const premium = getEffectivePremium(formData)
         return (
           <div className="space-y-3">
             <div className="flex gap-4 items-center">
@@ -329,7 +340,7 @@ export default function UpdateStageModal({
                   </div>
                 </div>
                 {!premium && (
-                  <p className="text-xs text-red-500 font-medium animate-pulse">Please enter Bound Premium first to calculate percentage.</p>
+                  <p className="text-xs text-red-500 font-medium animate-pulse">Please enter Bound / Renewal Premium first to calculate percentage.</p>
                 )}
               </div>
             )}
@@ -355,10 +366,10 @@ export default function UpdateStageModal({
                   };
 
                   // When premium changes, auto-calculate commission if a master percentage exists
-                  const isPremiumField = fieldKey === 'bound_premium' || fieldKey === 'new_premium';
+                  const isPremiumField = fieldKey === 'bound_premium' || fieldKey === 'new_premium' || fieldKey === 'renewal_premium';
                   if (isPremiumField && next.expected_commission_percentage !== undefined && next.expected_commission_percentage !== null && next.expected_commission_percentage !== '') {
                     const numPct = Number(next.expected_commission_percentage);
-                    const premium = Number(val || 0);
+                    const premium = getEffectivePremium(next);
                     if (premium > 0 && numPct > 0) {
                       next.expected_commission = Number(((premium * numPct) / 100).toFixed(2));
                     } else if (premium === 0) {

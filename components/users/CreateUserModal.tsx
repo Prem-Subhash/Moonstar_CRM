@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, Eye, EyeOff } from 'lucide-react'
 import { Spinner } from '@/components/ui/Loading'
 import { toast } from '@/lib/toast'
 import { COMPANY_ROLE_MAP, CompanyKey, validateCompanyRole } from '@/constants/companyRoles'
@@ -31,6 +31,7 @@ export function CreateUserModal({ isOpen, onClose, fixedRole, onSuccess }: Creat
         insurance_access: ['personal', 'commercial']
     })
     const [createLoading, setCreateLoading] = useState(false)
+    const [showPassword, setShowPassword] = useState(false)
 
     const handleCompanyChange = (newCompany: CompanyKey) => {
         if (fixedRole) return
@@ -152,15 +153,25 @@ export function CreateUserModal({ isOpen, onClose, fixedRole, onSuccess }: Creat
                 </div>
                 <div className="flex flex-col gap-1.5">
                     <label className="text-[10px] font-bold text-black uppercase tracking-widest ml-1">Password</label>
-                    <input
-                        required
-                        type="password"
-                        autoComplete="new-password"
-                        value={formData.password}
-                        onChange={e => setFormData({ ...formData, password: e.target.value })}
-                        className="bg-gray-50 border border-gray-200 p-3 h-[46px] rounded-xl focus:ring-2 focus:ring-emerald-600/20 focus:border-emerald-600 outline-none text-sm transition-all"
-                        placeholder="Min 6 chars"
-                    />
+                    <div className="relative group">
+                        <input
+                            required
+                            type={showPassword ? "text" : "password"}
+                            autoComplete="new-password"
+                            value={formData.password}
+                            onChange={e => setFormData({ ...formData, password: e.target.value })}
+                            className="bg-gray-50 border border-gray-200 p-3 h-[46px] rounded-xl focus:ring-2 focus:ring-emerald-600/20 focus:border-emerald-600 outline-none text-sm transition-all w-full pr-12"
+                            placeholder="Min 6 chars"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-emerald-600 transition-colors"
+                            aria-label={showPassword ? "Hide password" : "Show password"}
+                        >
+                            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                    </div>
                 </div>
 
                 {isCSR && (

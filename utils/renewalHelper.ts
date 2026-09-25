@@ -184,6 +184,7 @@ export function buildRenewalPayload(
     current_premium: Number(premiumStr),
     renewal_premium: null,
     referral,
+    referral_id: r.referral_id || null,
     notes,
     policy_flow: 'renewal',
     insurence_category: category,

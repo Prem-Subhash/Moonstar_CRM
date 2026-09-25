@@ -189,14 +189,56 @@ export default function Sidebar({
   const accountingMenu: MenuItem[] = [
     { label: "Dashboard", href: "/accounting", icon: <LayoutGrid size={24} /> },
     {
-      label: "All Leads",
+      label: "Policy Ledger",
       href: "/accounting/all-leads",
       icon: <GitBranch size={24} />,
+      children: [
+        {
+          label: "All Policies",
+          href: "/accounting/all-leads",
+          icon: <GitBranch size={18} />,
+        },
+        {
+          label: "Personal - New",
+          href: "/accounting/all-leads?category=personal&flow=new",
+          icon: <FileCheck size={18} />,
+        },
+        {
+          label: "Personal - Renewal",
+          href: "/accounting/all-leads?category=personal&flow=renewal",
+          icon: <RefreshCw size={18} />,
+        },
+        {
+          label: "Commercial - New",
+          href: "/accounting/all-leads?category=commercial&flow=new",
+          icon: <Briefcase size={18} />,
+        },
+        {
+          label: "Commercial - Renewal",
+          href: "/accounting/all-leads?category=commercial&flow=renewal",
+          icon: <RefreshCw size={18} />,
+        },
+      ],
+    },
+    {
+      label: "Reconciliation Queue",
+      href: "/accounting/all-leads?status=discrepancy",
+      icon: <Activity size={24} />,
+    },
+    {
+      label: "Carrier Statements",
+      href: "/accounting/statements",
+      icon: <FileText size={24} />,
     },
     {
       label: "Financial Reports",
       href: "/accounting/reports",
       icon: <DollarSign size={24} />,
+    },
+    {
+      label: "Audit Log",
+      href: "/accounting/audit-logs",
+      icon: <PieChart size={24} />,
     },
   ];
 

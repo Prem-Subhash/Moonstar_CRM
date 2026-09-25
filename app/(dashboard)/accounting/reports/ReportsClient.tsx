@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabaseClient'
 import { useToast } from '@/components/ui/Toast'
 import { formatCurrency } from '@/lib/currency'
 import { getActivePolicy } from '@/utils/activePolicyHelper'
+import { resolvePolicyState } from '@/utils/policyStateHelper'
 import {
   DollarSign, Percent, Calendar, Download, Printer, Search,
   BarChart2, User, Clock, ShieldCheck, AlertCircle, Info,
@@ -34,13 +35,47 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
   const [carrier, setCarrier] = useState<string>('all')
   const [assignedCsr, setAssignedCsr] = useState<string>('all')
 
+  const [periodPreset, setPeriodPreset] = useState<string>('last30')
+  const [category, setCategory] = useState<string>('all')
+  const [state, setState] = useState<string>('all')
+  const [availableStates, setAvailableStates] = useState<string[]>([])
+
+  const setPreset = (preset: string) => {
+    setPeriodPreset(preset)
+    const now = new Date()
+    const year = now.getFullYear()
+
+    if (preset === 'thisMonth') {
+      const start = new Date(year, now.getMonth(), 1).toISOString().split('T')[0]
+      const end = new Date(year, now.getMonth() + 1, 0).toISOString().split('T')[0]
+      setStartDate(start); setEndDate(end)
+    } else if (preset === 'lastMonth') {
+      const start = new Date(year, now.getMonth() - 1, 1).toISOString().split('T')[0]
+      const end = new Date(year, now.getMonth(), 0).toISOString().split('T')[0]
+      setStartDate(start); setEndDate(end)
+    } else if (preset === 'q1') {
+      setStartDate(`${year}-01-01`); setEndDate(`${year}-03-31`)
+    } else if (preset === 'q2') {
+      setStartDate(`${year}-04-01`); setEndDate(`${year}-06-30`)
+    } else if (preset === 'q3') {
+      setStartDate(`${year}-07-01`); setEndDate(`${year}-09-30`)
+    } else if (preset === 'q4') {
+      setStartDate(`${year}-10-01`); setEndDate(`${year}-12-31`)
+    } else if (preset === 'ytd') {
+      setStartDate(`${year}-01-01`); setEndDate(now.toISOString().split('T')[0])
+    } else if (preset === 'last30') {
+      setStartDate(defaultStartDate()); setEndDate(defaultEndDate())
+    }
+  }
+
   const resetFilters = () => {
-    setStartDate(defaultStartDate())
-    setEndDate(defaultEndDate())
+    setPreset('last30')
     setAccountingStatus('all')
     setAccountingVerified('all')
+    setCategory('all')
     setPolicyFlow('all')
     setCarrier('all')
+    setState('all')
     setAssignedCsr('all')
     showToast('Filters have been cleared.', 'success')
   }
@@ -54,12 +89,17 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
   useEffect(() => {
     const fetchDropdowns = async () => {
       try {
-        const { data } = await supabase.from('temp_leads_basics').select('carrier, policy_flow, new_carrier')
+        const { data } = await supabase.from('temp_leads_basics').select(`
+          carrier, policy_flow, new_carrier,
+          intake_forms:temp_intake_forms ( form_data, submitted_at )
+        `)
         if (data) {
           const carriers = Array.from(new Set(data.flatMap(d => [d.carrier, d.new_carrier]).filter(Boolean))) as string[]
           const flows = Array.from(new Set(data.map(d => d.policy_flow).filter(Boolean))) as string[]
+          const states = Array.from(new Set(data.map(d => resolvePolicyState(d)).filter(s => s && s !== '—'))) as string[]
           setAvailableCarriers(carriers.sort())
           setAvailableFlows(flows.sort())
+          setAvailableStates(states.sort())
         }
       } catch (err) {
         console.error('Failed to load filter options:', err)
@@ -76,7 +116,8 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
         effective_date, total_premium, expected_commission, actual_commission,
         accounting_status, accounting_verified, created_at, assigned_csr,
         new_carrier, new_policy_number, new_premium,
-        assigned_user_profile:profiles!fk_profile (full_name)
+        assigned_user_profile:profiles!fk_profile (full_name),
+        intake_forms:temp_intake_forms ( form_data, submitted_at )
       `)
 
       if (startDate) query = query.gte('created_at', new Date(startDate).toISOString())
@@ -89,13 +130,19 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
         else query = query.eq('accounting_status', accountingStatus)
       }
       if (accountingVerified !== 'all') query = query.eq('accounting_verified', accountingVerified === 'verified')
-      if (policyFlow !== 'all') query = query.eq('policy_flow', policyFlow)
+      if (category !== 'all') query = query.ilike('insurence_category', `%${category}%`)
+      if (policyFlow !== 'all') query = query.ilike('policy_flow', `%${policyFlow}%`)
       if (carrier !== 'all') query = query.or(`carrier.eq.${carrier},new_carrier.eq.${carrier}`)
       if (assignedCsr !== 'all') query = query.eq('assigned_csr', assignedCsr)
 
       const { data, error } = await query
       if (error) throw error
-      setLeads(data || [])
+      
+      let finalLeads = data || []
+      if (state !== 'all') {
+        finalLeads = finalLeads.filter(l => resolvePolicyState(l) === state)
+      }
+      setLeads(finalLeads)
 
       const { data: logsData } = await supabase
         .from('accounting_logs')
@@ -116,7 +163,9 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
     }
   }
 
-  useEffect(() => { fetchReportData() }, [startDate, endDate, accountingStatus, accountingVerified, policyFlow, carrier, assignedCsr])
+  useEffect(() => { 
+    fetchReportData() 
+  }, [startDate, endDate, accountingStatus, accountingVerified, category, policyFlow, carrier, state, assignedCsr])
 
   /* ── Aggregates ── */
   const totalPremiums = leads.reduce((s, r) => s + (Number(getActivePolicy(r).activePremium) || 0), 0)
@@ -147,15 +196,17 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
   /* ── Exports ── */
   const handleExportCSV = () => {
     if (leads.length === 0) { showToast('No data to export.', 'error'); return }
-    const headers = ['Client Name', 'Policy Number', 'Carrier', 'Policy Flow', 'Insurance Category', 'Effective Date', 'Total Premium', 'Expected Commission', 'Actual Commission', 'Accounting Status', 'Accounting Verified', 'Created Date']
+    const headers = ['Client Name', 'Policy Number', 'Carrier', 'Policy Flow', 'Insurance Category', 'State', 'Effective Date', 'Total Premium', 'Expected Commission', 'Actual Commission', 'Accounting Status', 'Accounting Verified', 'Created Date']
     const rows = leads.map(lead => {
       const active = getActivePolicy(lead)
+      const resolvedState = resolvePolicyState(lead)
       return [
         `"${(lead.client_name || '').replace(/"/g, '""')}"`,
         `"${(active.activePolicyNumber || '').replace(/"/g, '""')}"`,
         `"${(active.activeCarrier || '').replace(/"/g, '""')}"`,
         `"${(lead.policy_flow || '').replace(/"/g, '""')}"`,
         `"${(lead.insurence_category || '').replace(/"/g, '""')}"`,
+        `"${resolvedState}"`,
         lead.effective_date || 'N/A',
         active.activePremium ?? 0,
         lead.expected_commission ?? 0,
@@ -211,28 +262,55 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
 
       {/* ── Filters ── */}
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 sm:p-6 mb-6 space-y-5 no-print">
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-gray-100 pb-4">
           <div className="flex items-center gap-2">
             <SlidersHorizontal size={18} className="text-brand" />
-            <h2 className="text-sm font-semibold text-gray-800 uppercase tracking-wider">Report Filters</h2>
+            <h2 className="text-sm font-semibold text-gray-800 uppercase tracking-wider">Report Filters & Periods</h2>
           </div>
           <button
             onClick={resetFilters}
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-500 text-white hover:bg-rose-200 transition-colors border border-rose-200"
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-500 text-white hover:bg-rose-600 transition-colors border border-rose-200"
           >
             Reset Filters
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Period Selector Tabs */}
+        <div className="flex items-center gap-2 flex-wrap pb-2">
+          <span className="text-xs font-bold text-gray-500 mr-2 uppercase tracking-wide">Quick Periods:</span>
+          {[
+            { label: 'Last 30 Days', value: 'last30' },
+            { label: 'This Month', value: 'thisMonth' },
+            { label: 'Last Month', value: 'lastMonth' },
+            { label: 'Q1', value: 'q1' },
+            { label: 'Q2', value: 'q2' },
+            { label: 'Q3', value: 'q3' },
+            { label: 'Q4', value: 'q4' },
+            { label: 'Year to Date', value: 'ytd' },
+          ].map(p => (
+            <button
+              key={p.value}
+              onClick={() => setPreset(p.value)}
+              className={`px-3 py-1 text-xs font-bold rounded-lg border transition-colors ${
+                periodPreset === p.value
+                  ? 'bg-[#2E5C85] text-white border-[#2E5C85] shadow-sm'
+                  : 'bg-white text-gray-600 hover:bg-gray-50 border-gray-200'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {[
             {
               label: 'Start Date', type: 'date', value: startDate,
-              onChange: setStartDate, icon: <Calendar size={16} className="text-gray-400" />
+              onChange: (v: string) => { setStartDate(v); setPeriodPreset('custom') }, icon: <Calendar size={16} className="text-gray-400" />
             },
             {
               label: 'End Date', type: 'date', value: endDate,
-              onChange: setEndDate, icon: <Calendar size={16} className="text-gray-400" />
+              onChange: (v: string) => { setEndDate(v); setPeriodPreset('custom') }, icon: <Calendar size={16} className="text-gray-400" />
             },
           ].map(({ label, type, value, onChange, icon }) => (
             <div key={label} className="space-y-1.5 flex flex-col">
@@ -270,12 +348,29 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
               ]
             },
             {
+              label: 'Category', value: category, onChange: setCategory,
+              options: [
+                { label: 'All Categories', value: 'all' },
+                { label: 'Personal', value: 'personal' },
+                { label: 'Commercial', value: 'commercial' },
+              ]
+            },
+            {
               label: 'Policy Flow', value: policyFlow, onChange: setPolicyFlow,
-              options: [{ label: 'All Flows', value: 'all' }, ...availableFlows.map(f => ({ label: f, value: f }))]
+              options: [
+                { label: 'All Flows', value: 'all' },
+                { label: 'New Business', value: 'new' },
+                { label: 'Renewal', value: 'renewal' },
+                ...availableFlows.filter(f => f.toLowerCase() !== 'new' && f.toLowerCase() !== 'renewal').map(f => ({ label: f, value: f }))
+              ]
             },
             {
               label: 'Carrier', value: carrier, onChange: setCarrier,
               options: [{ label: 'All Carriers', value: 'all' }, ...availableCarriers.map(c => ({ label: c, value: c }))]
+            },
+            {
+              label: 'State', value: state, onChange: setState,
+              options: [{ label: 'All States', value: 'all' }, ...availableStates.map(s => ({ label: s, value: s }))]
             },
             {
               label: 'Assigned CSR', value: assignedCsr, onChange: setAssignedCsr,
@@ -494,21 +589,23 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left table-fixed" style={{ minWidth: '1200px' }}>
+              <table className="w-full text-sm text-left table-fixed" style={{ minWidth: '1300px' }}>
                 <colgroup>
-                  <col className="w-[240px]" />
+                  <col className="w-[230px]" />
                   <col className="w-[180px]" />
+                  <col className="w-[80px]" />
                   <col className="w-[130px]" />
-                  <col className="w-[140px]" />
-                  <col className="w-[140px]" />
+                  <col className="w-[130px]" />
                   <col className="w-[130px]" />
                   <col className="w-[120px]" />
-                  <col className="w-[120px]" />
+                  <col className="w-[110px]" />
+                  <col className="w-[110px]" />
                 </colgroup>
                 <thead className="text-white uppercase text-xs border-b border-gray-100 tracking-wider">
                   <tr className="bg-gradient-to-r from-[#10B889] to-[#2E5C85]">
                     <th className="px-4 py-4 font-semibold">Client</th>
                     <th className="px-4 py-4 font-semibold">Carrier / Flow</th>
+                    <th className="px-4 py-4 font-semibold text-center">State</th>
                     <th className="px-4 py-4 font-semibold text-right">Premium</th>
                     <th className="px-4 py-4 font-semibold text-right">Expected Comm</th>
                     <th className="px-4 py-4 font-semibold text-right">Actual Comm</th>
@@ -520,6 +617,7 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
                 <tbody className="divide-y divide-gray-100 bg-white">
                   {leads.map(lead => {
                     const active = getActivePolicy(lead)
+                    const resolvedState = resolvePolicyState(lead)
                     const s = lead.accounting_status?.toLowerCase()
                     const sColor =
                       s === 'reconciled' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
@@ -536,6 +634,9 @@ export default function ReportsClient({ csrs }: ReportsClientProps) {
                         <td className="px-4 py-4 align-top">
                           <p className="font-medium text-gray-900 break-words">{active.activeCarrier || '—'}</p>
                           <p className="text-xs text-gray-500 mt-0.5 break-words">{lead.policy_flow}</p>
+                        </td>
+                        <td className="px-4 py-4 text-center text-xs font-semibold text-gray-600 align-top uppercase">
+                          {resolvedState}
                         </td>
                         <td className="px-4 py-4 text-right text-gray-900 align-top">
                           {formatCurrency(active.activePremium)}

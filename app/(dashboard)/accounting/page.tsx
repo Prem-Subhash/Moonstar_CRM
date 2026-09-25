@@ -39,11 +39,26 @@ export default async function AccountingDashboard() {
   // 3. Fetch Real Leads Data for Financial Metrics
   const { data: leads, error: leadsError } = await supabase
     .from('temp_leads_basics')
-    .select('total_premium, expected_commission, actual_commission, accounting_status')
+    .select(`
+      total_premium, 
+      new_premium,
+      carrier,
+      new_carrier,
+      policy_number,
+      new_policy_number,
+      expected_commission, 
+      actual_commission, 
+      accounting_status,
+      insurence_category,
+      policy_flow
+    `)
 
   if (leadsError) {
     console.error('Fetch leads failed:', leadsError)
   }
+
+  // Import active policy helper dynamically or compute accurately
+  const { getActivePolicy } = await import('@/utils/activePolicyHelper')
 
   // Aggregate stats
   let totalPremium = 0
@@ -53,12 +68,48 @@ export default async function AccountingDashboard() {
   let discrepancyCount = 0
   let unreconciledCount = 0
 
+  // Line of Business & Flow breakdown
+  let plNewPremium = 0
+  let plNewExpected = 0
+  let plRenewalPremium = 0
+  let plRenewalExpected = 0
+  let clNewPremium = 0
+  let clNewExpected = 0
+  let clRenewalPremium = 0
+  let clRenewalExpected = 0
+
   if (leads) {
     for (const lead of leads) {
-      totalPremium += Number(lead.total_premium) || 0
-      totalExpectedComm += Number(lead.expected_commission) || 0
-      totalActualComm += Number(lead.actual_commission) || 0
+      const active = getActivePolicy(lead)
+      const prem = Number(active.activePremium) || 0
+      const exp = Number(lead.expected_commission) || 0
+      const act = Number(lead.actual_commission) || 0
+
+      totalPremium += prem
+      totalExpectedComm += exp
+      totalActualComm += act
       
+      const cat = lead.insurence_category?.toLowerCase() || ''
+      const flow = lead.policy_flow?.toLowerCase() || ''
+
+      if (cat.includes('personal')) {
+        if (flow.includes('renewal')) {
+          plRenewalPremium += prem
+          plRenewalExpected += exp
+        } else {
+          plNewPremium += prem
+          plNewExpected += exp
+        }
+      } else if (cat.includes('commercial')) {
+        if (flow.includes('renewal')) {
+          clRenewalPremium += prem
+          clRenewalExpected += exp
+        } else {
+          clNewPremium += prem
+          clNewExpected += exp
+        }
+      }
+
       const status = lead.accounting_status
       if (status === 'reconciled') {
         reconciledCount++
@@ -161,6 +212,37 @@ export default async function AccountingDashboard() {
     }
   ]
 
+  const lineBreakdownKpis = [
+    {
+      label: 'Personal · New',
+      premium: formatCurrency(plNewPremium),
+      expected: formatCurrency(plNewExpected),
+      link: '/accounting/all-leads?category=personal&flow=new',
+      badgeBg: 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    },
+    {
+      label: 'Personal · Renewal',
+      premium: formatCurrency(plRenewalPremium),
+      expected: formatCurrency(plRenewalExpected),
+      link: '/accounting/all-leads?category=personal&flow=renewal',
+      badgeBg: 'bg-teal-50 text-teal-700 border-teal-200'
+    },
+    {
+      label: 'Commercial · New',
+      premium: formatCurrency(clNewPremium),
+      expected: formatCurrency(clNewExpected),
+      link: '/accounting/all-leads?category=commercial&flow=new',
+      badgeBg: 'bg-blue-50 text-blue-700 border-blue-200'
+    },
+    {
+      label: 'Commercial · Renewal',
+      premium: formatCurrency(clRenewalPremium),
+      expected: formatCurrency(clRenewalExpected),
+      link: '/accounting/all-leads?category=commercial&flow=renewal',
+      badgeBg: 'bg-purple-50 text-purple-700 border-purple-200'
+    }
+  ]
+
   // --- SVG Charts Calculations ---
   // Chart 1: Expected vs Actual Commission Height Calculation
   const maxComm = Math.max(totalExpectedComm, totalActualComm, 100)
@@ -237,6 +319,42 @@ export default async function AccountingDashboard() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* ── Line of Business Breakdown Cards ── */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-black text-gray-500 uppercase tracking-widest">
+            Line of Business & Flow Breakdown
+          </h2>
+          <span className="text-[11px] text-gray-400 font-medium">Click card to view filtered policies</span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {lineBreakdownKpis.map((card, i) => (
+            <Link key={i} href={card.link} className="group">
+              <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm hover:shadow-md transition-all duration-200 h-full flex flex-col justify-between hover:border-[#2E5C85]/30">
+                <div className="flex items-center justify-between pb-2 border-b border-gray-50">
+                  <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${card.badgeBg}`}>
+                    {card.label}
+                  </span>
+                  <ArrowRight size={14} className="text-gray-300 group-hover:text-[#2E5C85] group-hover:translate-x-0.5 transition-all" />
+                </div>
+
+                <div className="pt-3 grid grid-cols-2 gap-2">
+                  <div>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Bound Premium</p>
+                    <p className="text-sm font-black text-gray-900 mt-0.5">{card.premium}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Expected Comm</p>
+                    <p className="text-sm font-black text-emerald-600 mt-0.5">{card.expected}</p>
+                  </div>
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
       </div>
 
       {/* ── Financial Charts Section ── */}
