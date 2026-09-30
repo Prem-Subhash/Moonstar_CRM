@@ -140,14 +140,15 @@ export default function CommercialLinesPage({ createRoute }: { createRoute?: str
     // Client-side search filtering
     const filteredLeads = leads.filter(lead => {
         const term = searchTerm.toLowerCase()
-        const normalizedSearchTerm = normalizePhoneSearch(searchTerm)
+        const termDigits = extractDigits(searchTerm)
         const dbPhoneStr = lead.phone || ''
 
         return (
             (lead.client_name && lead.client_name.toLowerCase().includes(term)) ||
             (lead.business_name && lead.business_name.toLowerCase().includes(term)) ||
             (lead.email && lead.email.toLowerCase().includes(term)) ||
-            (dbPhoneStr.includes(term) || extractDigits(dbPhoneStr).includes(extractDigits(term)))
+            dbPhoneStr.includes(term) ||
+            (termDigits.length > 0 && extractDigits(dbPhoneStr).includes(termDigits))
         )
     })
 

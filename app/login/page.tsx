@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
@@ -19,6 +19,15 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("deactivated") === "true") {
+        setError("Your account has been deactivated. Please contact an administrator.");
+      }
+    }
+  }, []);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -29,6 +38,12 @@ export default function LoginPage() {
     }
 
     setLoading(true);
+
+    if (typeof document !== 'undefined') {
+      const rememberValue = rememberMe ? 'true' : 'false';
+      const maxAgeStr = rememberMe ? '; max-age=31536000' : '';
+      document.cookie = `sb-remember-me=${rememberValue}; path=/${maxAgeStr}; SameSite=Lax`;
+    }
 
     const { error } = await supabase.auth.signInWithPassword({
       email,
@@ -50,7 +65,7 @@ export default function LoginPage() {
     if (session) {
       let { data: profile, error: profileError } = await supabase
         .from("profiles")
-        .select("role, portal_access")
+        .select("role, portal_access, is_active")
         .eq("id", session.user.id)
         .single();
 
@@ -60,7 +75,14 @@ export default function LoginPage() {
           .select("role")
           .eq("id", session.user.id)
           .single();
-        profile = { ...fallback.data, portal_access: [] };
+        profile = { ...fallback.data, portal_access: [], is_active: true };
+      }
+
+      if (profile && profile.is_active === false) {
+        await supabase.auth.signOut();
+        setError("Your account has been deactivated. Please contact an administrator.");
+        toast("Your account has been deactivated. Please contact an administrator.", "error");
+        return;
       }
 
       const role = profile?.role?.toLowerCase();
@@ -227,8 +249,8 @@ export default function LoginPage() {
                   Email Address
                 </label>
                 <div className="relative group">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-teal-500 transition-colors">
-                    <Mail size={18} />
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-500 group-focus-within:text-teal-500 transition-colors">
+                    <Mail size={18} aria-hidden="true" />
                   </div>
                   <input
                     type="email"
@@ -246,8 +268,8 @@ export default function LoginPage() {
                   Password
                 </label>
                 <div className="relative group">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-teal-500 transition-colors">
-                    <Lock size={18} />
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-500 group-focus-within:text-teal-500 transition-colors">
+                    <Lock size={18} aria-hidden="true" />
                   </div>
                   <input
                     type={showPassword ? "text" : "password"}
@@ -259,7 +281,8 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-teal-600 transition-colors"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-500 hover:text-teal-600 transition-colors"
                   >
                     {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
@@ -277,7 +300,7 @@ export default function LoginPage() {
                       onChange={() => setRememberMe(!rememberMe)}
                     />
                     <div
-                      className={`w-4 h-4 border rounded transition-all duration-200 flex items-center justify-center 
+                      className={`w-4 h-4 border rounded transition-all duration-200 flex items-center justify-center peer-focus-visible:ring-2 peer-focus-visible:ring-teal-500 peer-focus-visible:ring-offset-2 
                                     ${rememberMe ? "bg-teal-500 border-teal-500 text-white shadow-sm" : "border-gray-300 bg-gray-50/50 text-transparent group-hover:border-teal-400"}
                                 `}
                     >
