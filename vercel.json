@@ -3,10 +3,6 @@
     {
       "path": "/api/reminder-check",
       "schedule": "0 0 * * *"
-    },
-    {
-      "path": "/api/cron/process-outbox",
-      "schedule": "* * * * *"
     }
   ]
 }
