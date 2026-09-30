@@ -6,6 +6,7 @@ import ExcelJS from 'exceljs'
 import { formatCurrency } from '@/lib/currency'
 import { getActivePolicy } from '@/utils/activePolicyHelper'
 import { formatPolicies } from '@/utils/formatPolicies'
+import { authenticateApiRequest } from '@/utils/auth'
 
 // 1. Zod Input Validation
 const ReportSchema = z.object({
@@ -39,12 +40,9 @@ export async function POST(request: Request) {
     )
 
     // Auth Check
-    const {
-        data: { session },
-    } = await supabase.auth.getSession()
-
-    if (!session) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const auth = await authenticateApiRequest(request, ['csr', 'admin', 'superadmin', 'accounting'])
+    if (auth.error) {
+        return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
     const body = await request.json()
@@ -80,7 +78,9 @@ export async function POST(request: Request) {
         p_date_type: date_type,
         p_flow: safeFlow,
         p_category: safeCategory,
-        p_csr: assigned_csr || null
+        p_csr: assigned_csr || null,
+        p_line_of_businesses: (line_of_businesses && line_of_businesses.length > 0) ? line_of_businesses : null,
+        p_customer_name: customer_name || null
     })
 
     if (summaryError) {
@@ -92,6 +92,7 @@ export async function POST(request: Request) {
         .from('temp_leads_basics')
         .select(`
             id,
+            policy_id,
             client_name,
             policy_type,
             lead_policies(policy_type),
@@ -107,6 +108,17 @@ export async function POST(request: Request) {
             policy_flow,
             insurence_category,
             assigned_csr,
+            policy_terms:policy_terms!policy_term_id (
+              id,
+              policy_id,
+              term_sequence,
+              term_status,
+              carrier,
+              policy_number,
+              written_premium,
+              effective_date,
+              expiration_date
+            ),
             assigned_csr_profile:profiles!temp_leads_assigned_csr_fkey (full_name),
             assigned_user_profile:profiles!fk_profile (full_name)
         `, { count: 'exact' })
@@ -123,6 +135,38 @@ export async function POST(request: Request) {
 
     query = query.order(dateField, { ascending: false })
 
+    const getAuthoritativeTerm = (row: any) => {
+        if (Array.isArray(row.policy_terms)) {
+            return row.policy_terms.find((t: any) => t.term_status === 'Active') || row.policy_terms[0] || null
+        }
+        return typeof row.policy_terms === 'object' ? row.policy_terms : null
+    }
+
+    const transformRow = (row: any) => {
+        const activeTerm = getAuthoritativeTerm(row)
+        const active = getActivePolicy({ ...row, policy_terms: activeTerm || row.policy_terms })
+        const policiesFormatted = formatPolicies(row.lead_policies && row.lead_policies.length > 0 ? row.lead_policies.map((p: any) => p.policy_type) : row.policy_type)
+        
+        const activeCarrier = activeTerm?.carrier || active.activeCarrier
+        const activePolicyNumber = activeTerm?.policy_number || active.activePolicyNumber
+        const activePremium = (activeTerm && activeTerm.written_premium !== null && activeTerm.written_premium !== undefined)
+            ? Number(activeTerm.written_premium) || 0
+            : (active.activePremium ? Number(active.activePremium) : 0)
+        const rowDate = date_type === 'expiration'
+            ? (activeTerm?.expiration_date || row.renewal_date || row.effective_date)
+            : (activeTerm?.effective_date || row.effective_date)
+
+        return {
+            ...row,
+            policies_formatted: policiesFormatted,
+            active_carrier: activeCarrier,
+            active_policy_number: activePolicyNumber,
+            active_premium: activePremium,
+            display_date: rowDate,
+            is_switched: active.isSwitched
+        }
+    }
+
     // JSON Preview (Paginated)
     if (exportType === 'json') {
         const from = (page - 1) * limit
@@ -135,18 +179,7 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: error.message }, { status: 500 })
         }
 
-        const transformedData = data?.map(row => {
-            const active = getActivePolicy(row)
-            const policiesFormatted = formatPolicies(row.lead_policies && row.lead_policies.length > 0 ? row.lead_policies.map((p: any) => p.policy_type) : row.policy_type)
-            return {
-                ...row,
-                policies_formatted: policiesFormatted,
-                active_carrier: active.activeCarrier,
-                active_policy_number: active.activePolicyNumber,
-                active_premium: active.activePremium,
-                is_switched: active.isSwitched
-            }
-        }) || []
+        const transformedData = data?.map(transformRow) || []
 
         return NextResponse.json({
             summary: summaryData,
@@ -155,12 +188,14 @@ export async function POST(request: Request) {
         })
     }
 
-    // 5. Handle Export
+    // 5. Handle Export (Excel / PDF)
     const { data, error } = await query
 
     if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 })
     }
+
+    const transformedExportData = data?.map(transformRow) || []
 
     if (exportType === 'excel') {
         const workbook = new ExcelJS.Workbook()
@@ -183,7 +218,6 @@ export async function POST(request: Request) {
 
         // Data Table Headers
         const dateHeader = date_type === 'expiration' ? 'DATE (EXPIRATION)' : 'DATE (EFFECTIVE)'
-        const dateKey = date_type === 'expiration' ? 'renewal_date' : 'effective_date'
 
         const tableHeaderRow = worksheet.addRow(['CLIENT', 'TYPE', 'CATEGORY', 'FLOW', 'PREMIUM', 'CSR', dateHeader])
         tableHeaderRow.font = { bold: true }
@@ -197,17 +231,17 @@ export async function POST(request: Request) {
         })
 
         // Add lead data
-        data?.forEach((row: any) => {
-            const active = getActivePolicy(row)
-            worksheet.addRow([
+        transformedExportData.forEach((row: any) => {
+            const addedRow = worksheet.addRow([
                 row.client_name || '-',
-                formatPolicies(row.lead_policies && row.lead_policies.length > 0 ? row.lead_policies.map((p: any) => p.policy_type) : row.policy_type) || '-',
+                row.policies_formatted || '-',
                 row.insurence_category || '-',
                 row.policy_flow || '-',
-                active.activePremium ? formatCurrency(active.activePremium) : '$0.00',
+                row.active_premium,
                 row.assigned_csr_profile?.full_name || row.assigned_user_profile?.full_name || row.assigned_csr || '-',
-                row[dateKey] || row.effective_date || '-'
+                row.display_date || '-'
             ])
+            addedRow.getCell(5).numFmt = '"$"#,##0.00'
         })
 
         worksheet.columns.forEach((column, i) => {
@@ -243,7 +277,7 @@ export async function POST(request: Request) {
             doc.on('error', reject)
 
             try {
-                const dateLabel = date_type === 'expiration' ? 'Renewal Date' : 'Effective Date'
+                const dateLabel = date_type === 'expiration' ? 'Expiration Date' : 'Effective Date'
                 doc.fontSize(18).font(fontPathBold).text('Enterprise Report', { align: 'center' })
                 doc.fontSize(10).font(fontPathRegular).text(`Period: ${start_date} to ${end_date} (${dateLabel})`, { align: 'center' })
                 doc.moveDown(2)
@@ -257,13 +291,13 @@ export async function POST(request: Request) {
                 const drawHeader = (startY: number) => {
                     doc.rect(30, startY - 5, 540, 20).fill('#10B981') // Green box for headers
                     doc.fillColor('white').font(fontPathBold).fontSize(9)
-                    doc.text('CLIENT', 35, startY)
-                    doc.text('TYPE', 160, startY)
-                    doc.text('CATEGORY', 240, startY)
-                    doc.text('FLOW', 320, startY)
-                    doc.text('PREMIUM', 380, startY)
-                    doc.text('CSR', 460, startY)
-                    doc.text('DATE', 530, startY)
+                    doc.text('CLIENT', 35, startY, { width: 115, lineBreak: false })
+                    doc.text('TYPE', 155, startY, { width: 75, lineBreak: false })
+                    doc.text('CATEGORY', 235, startY, { width: 65, lineBreak: false })
+                    doc.text('FLOW', 305, startY, { width: 50, lineBreak: false })
+                    doc.text('PREMIUM', 360, startY, { width: 60, lineBreak: false })
+                    doc.text('CSR', 425, startY, { width: 65, lineBreak: false })
+                    doc.text('DATE', 495, startY, { width: 70, lineBreak: false })
                     doc.fillColor('black') // Reset color
                     return startY + 20
                 }
@@ -271,23 +305,21 @@ export async function POST(request: Request) {
                 let y = drawHeader(doc.y)
                 doc.font(fontPathRegular).fontSize(8)
 
-                data?.forEach((row: any) => {
-                    const active = getActivePolicy(row)
+                transformedExportData.forEach((row: any) => {
                     if (y > 750) {
                         doc.addPage()
                         y = drawHeader(30)
                         doc.font(fontPathRegular).fontSize(8)
                     }
-                    const premium = active.activePremium || 0
-                    const rowDate = date_type === 'expiration' ? (row.renewal_date || row.effective_date) : row.effective_date
-                    
-                    doc.text(row.client_name?.substring(0, 25) || '-', 35, y)
-                    doc.text((formatPolicies(row.lead_policies && row.lead_policies.length > 0 ? row.lead_policies.map((p: any) => p.policy_type) : row.policy_type)).substring(0, 20) || '-', 160, y)
-                    doc.text(row.insurence_category || '-', 240, y)
-                    doc.text(row.policy_flow || '-', 320, y)
-                    doc.text(formatCurrency(premium), 380, y)
-                    doc.text(row.assigned_csr_profile?.full_name?.substring(0, 15) || row.assigned_user_profile?.full_name?.substring(0, 15) || '-', 460, y)
-                    doc.text(rowDate || '-', 530, y)
+                    const csrName = row.assigned_csr_profile?.full_name || row.assigned_user_profile?.full_name || row.assigned_csr || '-'
+
+                    doc.text(row.client_name || '-', 35, y, { width: 115, height: 14, ellipsis: true })
+                    doc.text(row.policies_formatted || '-', 155, y, { width: 75, height: 14, ellipsis: true })
+                    doc.text(row.insurence_category || '-', 235, y, { width: 65, height: 14, ellipsis: true })
+                    doc.text(row.policy_flow || '-', 305, y, { width: 50, height: 14, ellipsis: true })
+                    doc.text(formatCurrency(row.active_premium), 380, y, { width: 60, height: 14, ellipsis: true })
+                    doc.text(csrName, 425, y, { width: 65, height: 14, ellipsis: true })
+                    doc.text(row.display_date || '-', 495, y, { width: 70, lineBreak: false })
                     y += 18
                     doc.moveTo(30, y - 5).lineTo(570, y - 5).strokeColor('#E5E7EB').lineWidth(0.5).stroke().strokeColor('black')
                 })
