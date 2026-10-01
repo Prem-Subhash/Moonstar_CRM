@@ -58,6 +58,7 @@ export const PERSONAL_RENEWAL_FIELDS: Record<string, Record<string, FieldConfig>
   },
   'Completed (Same)': {
     insurance_company_id: { label: 'Insurance Company', type: 'insurance_company', required: true },
+    expected_commission: { label: 'Commission', type: 'commission', required: true },
     paid_for_renewal: { label: 'Policy Paid?', type: 'dropdown', options: ['Yes', 'No'], required: true },
     notes: { label: 'Notes/Details', type: 'textarea' }
   },

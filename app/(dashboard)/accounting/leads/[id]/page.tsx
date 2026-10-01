@@ -3,7 +3,7 @@ import { createServer } from '@/lib/supabaseServer'
 import { redirect } from 'next/navigation'
 import LeadAccountingClient from '@/app/(dashboard)/accounting/leads/[id]/LeadAccountingClient'
 
-export default async function LeadAccountingPage({ params }: { params: { id: string } }) {
+export default async function LeadAccountingPage({ params }: { params: Promise<{ id: string }> | { id: string } }) {
   const supabase = await createServer()
 
   // 1. Verify Authentication
@@ -21,7 +21,8 @@ export default async function LeadAccountingPage({ params }: { params: { id: str
     redirect('/unauthorized')
   }
 
-  const leadId = params.id
+  const resolvedParams = await params
+  const leadId = resolvedParams.id
 
   // 3. Fetch lead details
   const { data: lead, error: leadError } = await supabase
@@ -40,6 +41,15 @@ export default async function LeadAccountingPage({ params }: { params: { id: str
       insurence_category,
       effective_date,
       total_premium,
+      locked_carrier_percent,
+      gross_commission,
+      admin_charge,
+      net_commission,
+      locked_referral_percent,
+      referral,
+      referral_id,
+      referral_payout,
+      company_commission,
       expected_commission,
       actual_commission,
       accounting_status,
@@ -47,7 +57,10 @@ export default async function LeadAccountingPage({ params }: { params: { id: str
       accounting_notes,
       carrier_payment_date,
       commission_received_date,
+      verified_by,
+      verified_at,
       assigned_csr,
+      stage_metadata,
       assigned_user_profile:profiles!fk_profile (
         full_name
       )

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseServer } from '@/lib/supabaseServer'
 import { authenticateApiRequest, authorizeLeadAccess } from '@/utils/auth'
+import { getActivePolicy } from '@/utils/activePolicyHelper'
 
 export async function POST(req: Request) {
   try {
@@ -263,9 +264,12 @@ export async function POST(req: Request) {
 
       let boundPremium = stageMetadata?.bound_premium !== undefined ? stageMetadata.bound_premium : mergedMetadata.bound_premium
 
-      // Fallback to renewal_premium for Completed (Same) where bound_premium is not defined in metadata
-      if ((boundPremium === undefined || boundPremium === null || boundPremium === '') && lead.renewal_premium !== undefined && lead.renewal_premium !== null) {
-        boundPremium = lead.renewal_premium
+      // Fallback to active policy premium for Completed (Same) where bound_premium is not defined in metadata
+      if (boundPremium === undefined || boundPremium === null || boundPremium === '') {
+        const activePrem = getActivePolicy(lead).activePremium
+        if (activePrem > 0) {
+          boundPremium = activePrem
+        }
       }
 
       // Enforce backend percentage calculation
@@ -381,8 +385,8 @@ export async function POST(req: Request) {
       let carrierPercent = lead.locked_carrier_percent
       let referralPercent = lead.locked_referral_percent
 
-      // Fresh binding event - fetch master percentages if insurance_company_id is present
-      if (carrierPercent === null || carrierPercent === undefined) {
+      // Fresh binding event or carrier switch - fetch master percentage for selected insurance company
+      if (stage.stage_name === 'Completed (Switch)' || carrierPercent === null || carrierPercent === undefined) {
         if (updatePayload.insurance_company_id) {
           const { data: icData, error: icError } = await supabaseServer
             .from('insurance_companies')
@@ -395,7 +399,9 @@ export async function POST(req: Request) {
           }
           carrierPercent = icData.commission_percent
         }
+      }
 
+      if (referralPercent === null || referralPercent === undefined) {
         if (lead.referral_id) {
           const { data: refData, error: refError } = await supabaseServer
             .from('referrals')

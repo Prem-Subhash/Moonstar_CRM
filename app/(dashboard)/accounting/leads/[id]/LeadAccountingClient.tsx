@@ -23,7 +23,13 @@ import {
   ShieldCheck,
   RefreshCw,
   Hash,
-  ChevronDown
+  ChevronDown,
+  Users,
+  PieChart,
+  ArrowDownRight,
+  Sparkles,
+  TrendingDown,
+  Scale
 } from 'lucide-react'
 import PageBackButton from '@/components/ui/PageBackButton'
 
@@ -60,6 +66,23 @@ export default function LeadAccountingClient({
   const [isUpdatingCommission, setIsUpdatingCommission] = useState(false)
   const [isVerifyingPolicy, setIsVerifyingPolicy] = useState(false)
 
+  // --- Financial Values from Database ---
+  const boundPremium = Number(active.activePremium || lead.total_premium || 0)
+  const carrierRate = lead.locked_carrier_percent !== null && lead.locked_carrier_percent !== undefined ? Number(lead.locked_carrier_percent) : null
+  const grossCommission = Number(lead.gross_commission ?? lead.expected_commission ?? 0)
+  const adminCharge = Number(lead.admin_charge ?? 0)
+  const netCommission = Number(lead.net_commission ?? (grossCommission - adminCharge))
+  const referralName = lead.referral ? String(lead.referral).trim() : ''
+  const hasReferral = Boolean(referralName && referralName.toLowerCase() !== 'none' && referralName.toLowerCase() !== 'null')
+  const referralRate = lead.locked_referral_percent !== null && lead.locked_referral_percent !== undefined ? Number(lead.locked_referral_percent) : null
+  const referralPayout = Number(lead.referral_payout ?? 0)
+  const companyCommission = Number(lead.company_commission ?? (grossCommission - referralPayout))
+  const agencyFee = Number(lead.stage_metadata?.agency_fees ?? lead.stage_metadata?.agency_fee ?? 0)
+
+  const currentExpected = Number(lead.expected_commission ?? grossCommission)
+  const currentActual = Number(lead.actual_commission ?? 0)
+  const variance = currentExpected - currentActual
+
   // --- Data Fetching ---
   const fetchLeadAndLogs = async () => {
     setRefreshing(true)
@@ -81,6 +104,15 @@ export default function LeadAccountingClient({
           insurence_category,
           effective_date,
           total_premium,
+          locked_carrier_percent,
+          gross_commission,
+          admin_charge,
+          net_commission,
+          locked_referral_percent,
+          referral,
+          referral_id,
+          referral_payout,
+          company_commission,
           expected_commission,
           actual_commission,
           accounting_status,
@@ -88,7 +120,10 @@ export default function LeadAccountingClient({
           accounting_notes,
           carrier_payment_date,
           commission_received_date,
+          verified_by,
+          verified_at,
           assigned_csr,
+          stage_metadata,
           assigned_user_profile:profiles!fk_profile (
             full_name
           )
@@ -223,7 +258,8 @@ export default function LeadAccountingClient({
 
   // Helper status badge styles
   const getStatusBadge = (status: string) => {
-    switch (status) {
+    const s = (status || '').toLowerCase()
+    switch (s) {
       case 'reconciled':
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 uppercase tracking-wide">
@@ -239,7 +275,7 @@ export default function LeadAccountingClient({
       default:
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-full bg-blue-50 text-blue-600 border border-blue-100 uppercase tracking-wide">
-            <Info size={12} /> Unreconciled
+            <Info size={12} /> Pending / Unreconciled
           </span>
         )
     }
@@ -263,7 +299,7 @@ export default function LeadAccountingClient({
             )}
           </div>
           <p className="text-gray-500 text-sm">
-            ID: <span className="font-mono text-xs break-all">{lead.id}</span>
+            Policy Flow: <span className="font-bold text-gray-700 capitalize">{lead.policy_flow || 'New'}</span> &bull; Category: <span className="font-bold text-gray-700 capitalize">{lead.insurence_category || 'Personal'}</span> &bull; ID: <span className="font-mono text-xs break-all text-gray-400">{lead.id}</span>
           </p>
         </div>
 
@@ -279,10 +315,10 @@ export default function LeadAccountingClient({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* ── LEFT COLUMN (POLICY INFO & AUDIT TRAIL) ── */}
+        {/* ── LEFT COLUMN (POLICY INFO, REFERRAL, COMMISSION BREAKDOWN, AUDIT TRAIL) ── */}
         <div className="lg:col-span-2 space-y-6 min-w-0">
           
-          {/* Section 1: Client / Policy Info */}
+          {/* Section 1: Client & Policy Info */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6 min-w-0">
             <div className="flex items-center gap-2.5 pb-4 border-b border-gray-50">
               <div className="p-2 bg-blue-50 text-[#2E5C85] rounded-xl shrink-0">
@@ -340,14 +376,14 @@ export default function LeadAccountingClient({
 
               <div className="space-y-1">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Insurance Category</p>
-                <span className="inline-flex px-2 py-0.5 text-xs font-bold rounded bg-gray-100 text-gray-600">
+                <span className="inline-flex px-2 py-0.5 text-xs font-bold rounded bg-gray-100 text-gray-600 capitalize">
                   {lead.insurence_category || 'N/A'}
                 </span>
               </div>
 
               <div className="space-y-1">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Policy Flow</p>
-                <span className="inline-flex px-2 py-0.5 text-xs font-bold rounded bg-gray-100 text-gray-600">
+                <span className="inline-flex px-2 py-0.5 text-xs font-bold rounded bg-gray-100 text-gray-600 capitalize">
                   {lead.policy_flow || 'N/A'}
                 </span>
               </div>
@@ -358,10 +394,165 @@ export default function LeadAccountingClient({
                   <Calendar size={12} /> {lead.effective_date || 'N/A'}
                 </p>
               </div>
+
+              <div className="space-y-1">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Bound Premium</p>
+                <p className="text-sm font-black text-gray-900">
+                  {formatCurrency(boundPremium)}
+                </p>
+              </div>
+
+              {(agencyFee > 0 || lead.insurence_category === 'commercial') && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wide">Agency Fee (Client Paid)</p>
+                  <p className="text-sm font-black text-amber-700">
+                    {formatCurrency(agencyFee)}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Section 5: Audit Logs */}
+          {/* Section 2: Referral Information */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6">
+            <div className="flex items-center justify-between pb-4 border-b border-gray-50 flex-wrap gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className={`p-2 rounded-xl shrink-0 ${hasReferral ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-500'}`}>
+                  <Users size={18} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-black text-gray-800">Referral Information</h2>
+                  <p className="text-xs text-gray-400">Referral partner tracking and commission split</p>
+                </div>
+              </div>
+              <div>
+                {hasReferral ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                    <CheckCircle2 size={12} /> Referral Active
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                    No Referral
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-gray-50/80 rounded-xl p-4 border border-gray-100">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Referral Partner</p>
+                <p className="text-sm font-black text-gray-800 mt-1 capitalize">
+                  {hasReferral ? referralName : 'None / Direct Client'}
+                </p>
+              </div>
+
+              <div className="bg-gray-50/80 rounded-xl p-4 border border-gray-100">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Referral Rate</p>
+                <p className="text-sm font-black text-gray-800 mt-1">
+                  {hasReferral && referralRate !== null ? `${referralRate.toFixed(2)}%` : '0.00% / N/A'}
+                </p>
+              </div>
+
+              <div className={`rounded-xl p-4 border ${hasReferral ? 'bg-blue-50/60 border-blue-100' : 'bg-gray-50/80 border-gray-100'}`}>
+                <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Referral Payout</p>
+                <p className={`text-base font-black mt-1 ${hasReferral ? 'text-blue-700' : 'text-gray-700'}`}>
+                  {formatCurrency(referralPayout)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: 5-Way Commission Breakdown */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6">
+            <div className="flex items-center justify-between pb-4 border-b border-gray-50 flex-wrap gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl shrink-0">
+                  <PieChart size={18} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-black text-gray-800">5-Way Commission Breakdown</h2>
+                  <p className="text-xs text-gray-400">Authoritative contract splits from commission engine</p>
+                </div>
+              </div>
+              <div className="text-xs font-bold bg-gray-100 text-gray-600 px-2.5 py-1 rounded-lg">
+                Carrier Rate: {carrierRate !== null ? `${carrierRate.toFixed(2)}%` : '—'}
+              </div>
+            </div>
+
+            {/* Financial Waterfall Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Bound Premium</p>
+                <p className="text-sm font-black text-gray-900 mt-1">{formatCurrency(boundPremium)}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Written Policy Value</p>
+              </div>
+
+              <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Gross Commission</p>
+                <p className="text-sm font-black text-gray-900 mt-1">{formatCurrency(grossCommission)}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Premium &times; Carrier %</p>
+              </div>
+
+              <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Admin Charge (10%)</p>
+                <p className="text-sm font-black text-gray-700 mt-1">{formatCurrency(adminCharge)}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">{hasReferral ? '10% of Gross' : 'No Referral ($0.00)'}</p>
+              </div>
+
+              <div className="bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Net Commission</p>
+                <p className="text-sm font-black text-gray-900 mt-1">{formatCurrency(netCommission)}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Gross &minus; Admin Charge</p>
+              </div>
+
+              <div className="bg-blue-50/60 rounded-xl p-3.5 border border-blue-100">
+                <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wide">Referral Payout</p>
+                <p className="text-sm font-black text-blue-700 mt-1">{formatCurrency(referralPayout)}</p>
+                <p className="text-[10px] text-blue-600 mt-0.5">{hasReferral ? `Net &times; ${referralRate ?? 0}%` : '$0.00 (No Referral)'}</p>
+              </div>
+
+              <div className="bg-emerald-50/70 rounded-xl p-3.5 border border-emerald-200 shadow-sm">
+                <p className="text-[10px] font-bold text-emerald-800 uppercase tracking-wide">Company Commission</p>
+                <p className="text-base font-black text-emerald-700 mt-0.5">{formatCurrency(companyCommission)}</p>
+                <p className="text-[10px] text-emerald-600 mt-0.5 font-bold">Gross &minus; Referral Payout</p>
+              </div>
+
+              {(agencyFee > 0 || lead.insurence_category === 'commercial') && (
+                <div className="bg-amber-50/70 rounded-xl p-3.5 border border-amber-200 shadow-sm col-span-2 sm:col-span-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold text-amber-800 uppercase tracking-wide">Agency Fee (Separate Client Payment)</p>
+                    <p className="text-[10px] text-amber-600 font-medium">Direct client fee &bull; Excluded from carrier commission & referral splits</p>
+                  </div>
+                  <p className="text-base font-black text-amber-700">{formatCurrency(agencyFee)}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Visual Financial Flow Summary */}
+            <div className="bg-gradient-to-r from-gray-50 to-blue-50/30 rounded-xl p-3.5 border border-gray-100 text-xs text-gray-600">
+              <div className="flex items-center gap-2 font-bold text-gray-700 mb-1">
+                <Sparkles size={14} className="text-[#2E5C85]" />
+                <span>Financial Distribution Path</span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-gray-500">
+                Gross Commission <span className="font-bold text-gray-700">{formatCurrency(grossCommission)}</span>
+                {hasReferral ? (
+                  <>
+                    {' '} &rarr; Admin Fee deducted <span className="font-bold text-gray-700">{formatCurrency(adminCharge)}</span>
+                    {' '} &rarr; Net Base <span className="font-bold text-gray-700">{formatCurrency(netCommission)}</span>
+                    {' '} &rarr; Referral Payout to <strong>{referralName}</strong> ({referralRate}%) = <span className="font-bold text-blue-700">{formatCurrency(referralPayout)}</span>
+                    {' '} &rarr; Retained Company Revenue = <span className="font-bold text-emerald-700">{formatCurrency(companyCommission)}</span>.
+                  </>
+                ) : (
+                  <>
+                    {' '} &rarr; No Referral Partner attached ($0.00 deduction) &rarr; Full 100% Retained Company Revenue = <span className="font-bold text-emerald-700">{formatCurrency(companyCommission)}</span>.
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* Section 4: Audit Logs */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6">
             <div className="flex items-center gap-2.5 pb-4 border-b border-gray-50">
               <div className="p-2 bg-purple-50 text-purple-600 rounded-xl">
@@ -400,7 +591,7 @@ export default function LeadAccountingClient({
                             <div>
                               <span className="font-bold">Expected Commission:</span>{' '}
                               <span className="text-red-500">{formatCurrency(log.old_expected_commission)}</span>{' '}
-                              →{' '}
+                              &rarr;{' '}
                               <span className="text-emerald-600 font-bold">{formatCurrency(log.new_expected_commission)}</span>
                             </div>
                           )}
@@ -408,7 +599,7 @@ export default function LeadAccountingClient({
                             <div>
                               <span className="font-bold">Actual Commission:</span>{' '}
                               <span className="text-red-500">{formatCurrency(log.old_actual_commission)}</span>{' '}
-                              →{' '}
+                              &rarr;{' '}
                               <span className="text-emerald-600 font-bold">{formatCurrency(log.new_actual_commission)}</span>
                             </div>
                           )}
@@ -420,7 +611,7 @@ export default function LeadAccountingClient({
                         <div>
                           <span className="font-bold">Status:</span>{' '}
                           <span className="line-through text-gray-400">{log.old_status || 'N/A'}</span>{' '}
-                          →{' '}
+                          &rarr;{' '}
                           <span className="text-[#2E5C85] font-bold uppercase text-[10px] tracking-wide bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">
                             {log.new_status}
                           </span>
@@ -442,34 +633,61 @@ export default function LeadAccountingClient({
           </div>
         </div>
 
-        {/* ── RIGHT COLUMN (FINANCIALS, ACTION CONTROLS, VERIFICATION) ── */}
+        {/* ── RIGHT COLUMN (RECONCILIATION, VARIANCE, ACTION CONTROLS, VERIFICATION) ── */}
         <div className="space-y-6">
           
-          {/* Section 2: Financial Info (Totals & Inputs) */}
+          {/* Section 5: Reconciliation & Variance Card */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6">
             <div className="flex items-center gap-2.5 pb-4 border-b border-gray-50">
               <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
-                <DollarSign size={18} />
+                <Scale size={18} />
               </div>
-              <h2 className="text-lg font-black text-gray-800">Financial Metrics</h2>
+              <div>
+                <h2 className="text-lg font-black text-gray-800">Commission Variance</h2>
+                <p className="text-xs text-gray-400">Statement matching & collection status</p>
+              </div>
+            </div>
+
+            {/* Variance Highlight Card */}
+            <div className={`p-4 rounded-xl border ${
+              variance === 0 && currentActual > 0
+                ? 'bg-emerald-50 border-emerald-200' 
+                : currentActual === 0 
+                ? 'bg-blue-50/60 border-blue-100' 
+                : 'bg-orange-50 border-orange-200'
+            }`}>
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Reconciliation Variance</span>
+                <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                  variance === 0 && currentActual > 0
+                    ? 'bg-emerald-100 text-emerald-800' 
+                    : currentActual === 0 
+                    ? 'bg-blue-100 text-blue-800' 
+                    : 'bg-orange-100 text-orange-800'
+                }`}>
+                  {variance === 0 && currentActual > 0 ? 'Fully Reconciled' : currentActual === 0 ? 'Uncollected' : 'Discrepancy'}
+                </span>
+              </div>
+              <p className={`text-2xl font-black mt-2 ${
+                variance === 0 && currentActual > 0 ? 'text-emerald-700' : currentActual === 0 ? 'text-blue-800' : 'text-orange-700'
+              }`}>
+                {formatCurrency(variance)}
+              </p>
+              <p className="text-[11px] text-gray-500 mt-1">
+                Expected ({formatCurrency(currentExpected)}) &minus; Actual Received ({formatCurrency(currentActual)})
+              </p>
             </div>
 
             {/* Read-only KPI aggregates */}
-            <div className="grid grid-cols-3 gap-2">
-              <div className="bg-gray-50 rounded-xl p-3 text-center">
-                <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Bound Premium</p>
-                <p className="text-xs font-black text-gray-900 mt-1">
-                  {formatCurrency(active.activePremium)}
-                </p>
-              </div>
-              <div className="bg-gray-50 rounded-xl p-3 text-center">
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <div className="bg-gray-50 rounded-xl p-3 text-center border border-gray-100">
                 <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Expected Comm</p>
                 <p className="text-xs font-black text-emerald-600 mt-1">
                   {formatCurrency(lead.expected_commission)}
                 </p>
               </div>
-              <div className="bg-gray-50 rounded-xl p-3 text-center">
-                <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Actual Comm</p>
+              <div className="bg-gray-50 rounded-xl p-3 text-center border border-gray-100">
+                <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">Actual Received</p>
                 <p className="text-xs font-black text-purple-600 mt-1">
                   {formatCurrency(lead.actual_commission)}
                 </p>
@@ -484,7 +702,7 @@ export default function LeadAccountingClient({
                 </label>
                 <div className="relative rounded-xl shadow-sm">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                    <Percent size={14} />
+                    <DollarSign size={14} />
                   </div>
                   <input
                     type="number"
@@ -552,7 +770,7 @@ export default function LeadAccountingClient({
             </div>
           </div>
 
-          {/* Section 3 & 4: Verification, Checkbox, Notes & Action buttons */}
+          {/* Section 6: Verification, Checkbox, Notes & Action buttons */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6">
             <div className="flex items-center gap-2.5 pb-4 border-b border-gray-50">
               <div className="p-2 bg-orange-50 text-[#E07A5F] rounded-xl">
